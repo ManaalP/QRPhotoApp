@@ -597,15 +597,33 @@ function randomString(length = 8) {
   return res;
 }
 
-// Use photo button (Confirm & Enqueue)
+// Use photo button (Confirm & Enqueue with adaptive ~500KB compression)
 btnUse.addEventListener('click', async () => {
   if (!capturedCanvas) return;
 
   const captureDate = new Date();
 
-  // Export JPEG from review canvas (which already has chosen filter and date stamp applied)
-  const jpegQuality = CONFIG.JPEG_QUALITY || 0.8;
-  let dataUrl = reviewCanvas.toDataURL('image/jpeg', jpegQuality);
+  // Compress to target ~500 KB to preserve full resolution without bloat
+  const targetBytes = (CONFIG.TARGET_KB || 500) * 1024;
+  let quality = CONFIG.JPEG_QUALITY || 0.85;
+  let dataUrl = reviewCanvas.toDataURL('image/jpeg', quality);
+
+  // Approximate byte size of base64 data
+  const base64Len = dataUrl.length - 'data:image/jpeg;base64,'.length;
+  let approxBytes = Math.round((base64Len * 3) / 4);
+
+  // If initial export exceeds target by more than 15%, step quality down gradually
+  if (approxBytes > targetBytes * 1.15) {
+    const qualities = [0.80, 0.75, 0.70];
+    for (const q of qualities) {
+      const candidateUrl = reviewCanvas.toDataURL('image/jpeg', q);
+      const cLen = candidateUrl.length - 'data:image/jpeg;base64,'.length;
+      const cBytes = Math.round((cLen * 3) / 4);
+      dataUrl = candidateUrl;
+      approxBytes = cBytes;
+      if (approxBytes <= targetBytes * 1.15) break;
+    }
+  }
 
   // Inject EXIF metadata
   dataUrl = injectExifMetadata(dataUrl, captureDate);
