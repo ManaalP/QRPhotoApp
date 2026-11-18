@@ -62,6 +62,293 @@ const btnFallbackCapture = document.getElementById('btn-fallback-capture');
 const limitModal = document.getElementById('limit-modal');
 const modalUploadStatus = document.getElementById('modal-upload-status');
 
+// Sensor Debug DOM Elements (?debug=1)
+const sensorDebugOverlay = document.getElementById('sensor-debug-overlay');
+const dbgPlatform = document.getElementById('dbg-platform');
+const dbgSource = document.getElementById('dbg-source');
+const dbgAx = document.getElementById('dbg-ax');
+const dbgAy = document.getElementById('dbg-ay');
+const dbgAz = document.getElementById('dbg-az');
+const dbgCalcAngle = document.getElementById('dbg-calc-angle');
+const dbgHoldAngle = document.getElementById('dbg-hold-angle');
+const dbgScreenAngle = document.getElementById('dbg-screen-angle');
+const dbgCaptureRot = document.getElementById('dbg-capture-rot');
+const dbgUiRot = document.getElementById('dbg-ui-rot');
+const dbgSamples = document.getElementById('dbg-samples');
+
+// ==========================================================================
+// MOTION SENSOR ORIENTATION TRACKING (devicemotion / Accelerometer / screen)
+// Automatically determines physical phone hold (0, 90, 180, 270) even when
+// phone rotation lock is enabled.
+// ==========================================================================
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+let sensorPermissionRequested = false;
+let sensorActive = false;
+let genericSensor = null;
+let lastKnownDeviceAngle = 0; // 0, 90, 180, 270
+let candidateAngle = 0;
+let candidateFirstSeen = 0;
+let gravitySamples = [];
+const GRAVITY_SAMPLE_SIZE = 5;
+let sensorEventCount = 0;
+let sensorFirstEventReceived = false;
+
+// Debug mode flag (?debug=1)
+const urlParams = new URLSearchParams(window.location.search);
+const isDebugMode = urlParams.get('debug') === '1';
+
+if (isDebugMode && sensorDebugOverlay) {
+  sensorDebugOverlay.classList.remove('hidden');
+  if (dbgPlatform) dbgPlatform.textContent = isIOS ? 'iOS (Safari)' : 'Android / Other';
+}
+
+function getScreenAngle() {
+  if (window.screen && window.screen.orientation && typeof window.screen.orientation.angle === 'number') {
+    return (window.screen.orientation.angle % 360 + 360) % 360;
+  }
+  if (typeof window.orientation === 'number') {
+    return (window.orientation % 360 + 360) % 360;
+  }
+  return 0;
+}
+
+// Computes the rotation needed to render captured pixels upright
+function getCaptureRotation(devicePhysicalAngle = lastKnownDeviceAngle) {
+  const screenAngle = getScreenAngle();
+  // If no motion sensor has ever reported, fall back to 0 (screen coordinate frame)
+  if (!sensorFirstEventReceived) {
+    return 0;
+  }
+  return ((devicePhysicalAngle - screenAngle) % 360 + 360) % 360;
+}
+
+// Angular difference considering circular wrap-around [-180, +180]
+function angleDiff(a, b) {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+// Process raw gravity components (ax, ay, az in m/s^2)
+function processGravity(rawX, rawY, rawZ, sourceName = 'devicemotion') {
+  if (rawX == null || rawY == null) return;
+  sensorFirstEventReceived = true;
+  sensorEventCount++;
+
+  // In iOS DeviceMotionEvent, accelerationIncludingGravity signs are inverted
+  // relative to Android Chrome standard coordinates.
+  const normX = isIOS ? -rawX : rawX;
+  const normY = isIOS ? -rawY : rawY;
+  const normZ = rawZ != null ? (isIOS ? -rawZ : rawZ) : 0;
+
+  // Moving average smoothing over last ~5 samples
+  gravitySamples.push({ x: normX, y: normY, z: normZ });
+  if (gravitySamples.length > GRAVITY_SAMPLE_SIZE) {
+    gravitySamples.shift();
+  }
+
+  const avgX = gravitySamples.reduce((acc, s) => acc + s.x, 0) / gravitySamples.length;
+  const avgY = gravitySamples.reduce((acc, s) => acc + s.y, 0) / gravitySamples.length;
+  const avgZ = gravitySamples.reduce((acc, s) => acc + s.z, 0) / gravitySamples.length;
+
+  const xyMagnitude = Math.hypot(avgX, avgY);
+  const zMagnitude = Math.abs(avgZ);
+
+  // If phone is nearly flat on a table (face up or face down: z dominating xy),
+  // retain last known orientation to prevent erratic flips
+  if (xyMagnitude < 1.8 && zMagnitude > 6.0) {
+    updateDebugUI(avgX, avgY, avgZ, null, lastKnownDeviceAngle, sourceName);
+    return;
+  }
+
+  // Physical angle from device natural frame:
+  // Upright portrait: gravity pulls downward (+Y), angle = 0
+  // Left landscape (rotated 90 deg clockwise): gravity pulls toward +X, angle = 90
+  // Upside-down portrait: gravity pulls upward (-Y), angle = 180
+  // Right landscape (rotated 90 deg counter-clockwise): gravity pulls toward -X, angle = 270
+  let calculatedAngle = (Math.atan2(avgX, avgY) * 180 / Math.PI);
+  calculatedAngle = (calculatedAngle % 360 + 360) % 360;
+
+  // Snap to nearest 0, 90, 180, 270
+  const immediateSnap = (Math.round(calculatedAngle / 90) * 90) % 360;
+
+  // Hysteresis: only switch when rotated > 55 degrees from current orientation
+  // and holds that orientation for at least ~150 ms
+  const now = performance.now();
+  const diffFromCurrent = angleDiff(calculatedAngle, lastKnownDeviceAngle);
+
+  if (diffFromCurrent > 55) {
+    if (candidateAngle !== immediateSnap) {
+      candidateAngle = immediateSnap;
+      candidateFirstSeen = now;
+    } else if (now - candidateFirstSeen >= 150) {
+      if (lastKnownDeviceAngle !== candidateAngle) {
+        lastKnownDeviceAngle = candidateAngle;
+        onDeviceHoldChanged(lastKnownDeviceAngle);
+      }
+    }
+  } else {
+    candidateAngle = lastKnownDeviceAngle;
+  }
+
+  updateDebugUI(avgX, avgY, avgZ, calculatedAngle, lastKnownDeviceAngle, sourceName);
+}
+
+function updateDebugUI(ax, ay, az, calcAngle, holdAngle, source) {
+  if (!isDebugMode) return;
+  const screenAngle = getScreenAngle();
+  const captureRot = getCaptureRotation(holdAngle);
+  const uiRot = (360 - captureRot) % 360;
+
+  if (dbgSource) dbgSource.textContent = source;
+  if (dbgAx) dbgAx.textContent = ax.toFixed(2);
+  if (dbgAy) dbgAy.textContent = ay.toFixed(2);
+  if (dbgAz) dbgAz.textContent = az.toFixed(2);
+  if (dbgCalcAngle) dbgCalcAngle.textContent = calcAngle != null ? Math.round(calcAngle) : 'Flat';
+  if (dbgHoldAngle) dbgHoldAngle.textContent = holdAngle;
+  if (dbgScreenAngle) dbgScreenAngle.textContent = screenAngle;
+  if (dbgCaptureRot) dbgCaptureRot.textContent = captureRot;
+  if (dbgUiRot) dbgUiRot.textContent = uiRot;
+  if (dbgSamples) dbgSamples.textContent = sensorEventCount;
+}
+
+// Native camera UI feedback: Rotate icons/labels to stay upright with phone hold
+function onDeviceHoldChanged(deviceHoldAngle) {
+  const captureRot = getCaptureRotation(deviceHoldAngle);
+  // UI icons counter-rotate so they appear upright to user
+  const uiRotation = (360 - captureRot) % 360;
+  applyUIRotation(uiRotation);
+}
+
+function applyUIRotation(degrees) {
+  // Rotate specific icons and pills without changing their layout box or parent position
+  const rotatables = [
+    btnFlip?.querySelector('svg'),
+    btnFlash?.querySelector('svg'),
+    btnGrid?.querySelector('svg'),
+    zoom1xBtn,
+    zoom2xBtn,
+    shotsCounterEl,
+    uploadStatusEl
+  ];
+
+  rotatables.forEach(el => {
+    if (!el) return;
+    el.classList.add('sensor-rotatable');
+    el.style.transform = degrees === 0 ? '' : `rotate(${degrees}deg)`;
+  });
+
+  // Rotate filter pills inside strip
+  const filterPills = cameraFilterStrip?.querySelectorAll('.filter-pill');
+  if (filterPills) {
+    const isLandscape = window.matchMedia('(orientation: landscape)').matches;
+    filterPills.forEach(pill => {
+      pill.classList.add('sensor-rotatable');
+      // If page is in CSS landscape, filter pills already have rotate(180deg) via CSS
+      if (isLandscape) {
+        pill.style.transform = `rotate(${180 + degrees}deg)`;
+      } else {
+        pill.style.transform = degrees === 0 ? '' : `rotate(${degrees}deg)`;
+      }
+    });
+  }
+}
+
+// Devicemotion listener
+function handleDeviceMotion(e) {
+  const g = e.accelerationIncludingGravity;
+  if (g && (g.x != null || g.y != null)) {
+    processGravity(g.x, g.y, g.z, 'devicemotion');
+  }
+}
+
+// Deviceorientation fallback (beta / gamma) if devicemotion provides no data
+function handleDeviceOrientation(e) {
+  if (sensorFirstEventReceived) return; // devicemotion has higher priority
+  if (e.beta == null || e.gamma == null) return;
+
+  // Approximate gravity vector from Euler angles:
+  // gamma = left/right tilt [-90, 90]
+  // beta = front/back tilt [-180, 180]
+  const degToRad = Math.PI / 180;
+  const b = e.beta * degToRad;
+  const g = e.gamma * degToRad;
+
+  const x = Math.sin(g);
+  const y = Math.sin(b) * Math.cos(g);
+  const z = Math.cos(b) * Math.cos(g);
+
+  processGravity(x * 9.8, y * 9.8, z * 9.8, 'deviceorientation');
+}
+
+// Start motion sensor listeners
+function startMotionSensors() {
+  if (sensorActive) return;
+  sensorActive = true;
+
+  window.addEventListener('devicemotion', handleDeviceMotion, { passive: true });
+  window.addEventListener('deviceorientation', handleDeviceOrientation, { passive: true });
+
+  // Optional Generic Sensor API (Chrome Android)
+  if ('Accelerometer' in window && !genericSensor) {
+    try {
+      genericSensor = new window.Accelerometer({ frequency: 20 });
+      genericSensor.addEventListener('reading', () => {
+        if (genericSensor && genericSensor.x != null) {
+          processGravity(genericSensor.x, genericSensor.y, genericSensor.z, 'Accelerometer');
+        }
+      });
+      genericSensor.start();
+    } catch (e) {
+      // Permission or secure context error, devicemotion will handle it
+    }
+  }
+}
+
+// Stop motion sensor listeners
+function stopMotionSensors() {
+  sensorActive = false;
+  window.removeEventListener('devicemotion', handleDeviceMotion);
+  window.removeEventListener('deviceorientation', handleDeviceOrientation);
+  if (genericSensor) {
+    try { genericSensor.stop(); } catch (e) {}
+  }
+}
+
+// iOS Safari 13+ permission request from user gesture (first tap anywhere)
+async function requestSensorPermissionIfNeeded() {
+  if (sensorPermissionRequested) return;
+  sensorPermissionRequested = true;
+
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    try {
+      const response = await DeviceMotionEvent.requestPermission();
+      if (response === 'granted') {
+        startMotionSensors();
+      } else {
+        console.warn('DeviceMotion permission denied by user, using screen orientation fallback.');
+      }
+    } catch (err) {
+      console.warn('DeviceMotionEvent.requestPermission error:', err);
+    }
+  } else {
+    // Non-iOS or older browser where permissions are granted by default
+    startMotionSensors();
+  }
+}
+
+// Trigger sensor permission on first user interaction anywhere in the app
+function setupSensorGestureTrigger() {
+  const trigger = () => {
+    requestSensorPermissionIfNeeded();
+    window.removeEventListener('touchstart', trigger, true);
+    window.removeEventListener('click', trigger, true);
+  };
+  window.addEventListener('touchstart', trigger, { capture: true, passive: true });
+  window.addEventListener('click', trigger, { capture: true, passive: true });
+}
+
+
 // --- Filter Definitions ---
 const FILTERS = [
   { name: 'Original', cssClass: 'filter-original' },
@@ -895,7 +1182,11 @@ btnShutter.addEventListener('click', async () => {
       }
     }
 
-    // Determine target aspect ratio (3:4 in portrait, 4:3 in landscape)
+    // 2. Freeze current physical device hold and capture rotation at the exact moment of capture
+    const frozenDeviceHold = lastKnownDeviceAngle;
+    const captureRotation = getCaptureRotation(frozenDeviceHold);
+
+    // Determine target aspect ratio of the viewfinder (3:4 in portrait, 4:3 in landscape)
     const isLandscape = window.matchMedia('(orientation: landscape)').matches;
     const targetAspect = isLandscape ? (4 / 3) : (3 / 4);
 
@@ -942,23 +1233,48 @@ btnShutter.addEventListener('click', async () => {
       }
     }
 
-    capturedCanvas = document.createElement('canvas');
-    capturedCanvas.width = finalW;
-    capturedCanvas.height = finalH;
-    const ctx = capturedCanvas.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    // Step A: Draw cropped, mirrored (if front camera) source image onto an unrotated intermediate canvas
+    const baseCanvas = document.createElement('canvas');
+    baseCanvas.width = finalW;
+    baseCanvas.height = finalH;
+    const bCtx = baseCanvas.getContext('2d');
+    bCtx.imageSmoothingEnabled = true;
+    bCtx.imageSmoothingQuality = 'high';
 
-    // Front camera mirror consistency
+    // Front camera mirror consistency: mirror horizontally in viewfinder space
     if (currentFacingMode === 'user') {
-      ctx.translate(finalW, 0);
-      ctx.scale(-1, 1);
+      bCtx.translate(finalW, 0);
+      bCtx.scale(-1, 1);
     }
 
     if (sourceBitmap) {
-      ctx.drawImage(sourceBitmap, cropX, cropY, cropW, cropH, 0, 0, finalW, finalH);
+      bCtx.drawImage(sourceBitmap, cropX, cropY, cropW, cropH, 0, 0, finalW, finalH);
     } else {
-      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, finalW, finalH);
+      bCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, finalW, finalH);
+    }
+
+    // Step B: Draw onto capturedCanvas rotated by captureRotation so pixels are physically UPRIGHT
+    capturedCanvas = document.createElement('canvas');
+    if (captureRotation === 90 || captureRotation === 270) {
+      // 90 or 270 degree rotation swaps canvas dimensions
+      capturedCanvas.width = finalH;
+      capturedCanvas.height = finalW;
+    } else {
+      capturedCanvas.width = finalW;
+      capturedCanvas.height = finalH;
+    }
+
+    const cCtx = capturedCanvas.getContext('2d');
+    cCtx.imageSmoothingEnabled = true;
+    cCtx.imageSmoothingQuality = 'high';
+
+    if (captureRotation !== 0) {
+      // Translate to canvas center, rotate, and draw baseCanvas centered
+      cCtx.translate(capturedCanvas.width / 2, capturedCanvas.height / 2);
+      cCtx.rotate((captureRotation * Math.PI) / 180);
+      cCtx.drawImage(baseCanvas, -finalW / 2, -finalH / 2);
+    } else {
+      cCtx.drawImage(baseCanvas, 0, 0);
     }
 
     stopCamera();
@@ -1083,14 +1399,23 @@ btnUse.addEventListener('click', async () => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopCamera();
+    stopMotionSensors();
   } else {
     if (screenCamera.classList.contains('active')) {
       if (CONFIG.MAX_SHOTS === 0 || getShotsCount() < CONFIG.MAX_SHOTS) {
         startCamera();
       }
     }
+    if (sensorPermissionRequested) {
+      startMotionSensors();
+    }
     processUploadQueue();
   }
+});
+
+window.addEventListener('beforeunload', () => {
+  stopCamera();
+  stopMotionSensors();
 });
 
 window.addEventListener('online', () => {
@@ -1104,6 +1429,9 @@ function handleViewportOrOrientationChange() {
   }
   const activePill = cameraFilterStrip.querySelector('.filter-pill.active');
   if (activePill) centerActiveFilterPill(activePill, false);
+
+  // Update UI rotation immediately with new screen angle
+  onDeviceHoldChanged(lastKnownDeviceAngle);
 }
 
 window.addEventListener('resize', handleViewportOrOrientationChange);
@@ -1113,6 +1441,10 @@ window.addEventListener('orientationchange', () => {
 
 // --- Initialize App ---
 async function init() {
+  setupSensorGestureTrigger();
+  // Always register motion listeners (if permission API is required, requestPermission will activate on first touch)
+  startMotionSensors();
+
   if (window.supabase && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY) {
     try {
       supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);

@@ -128,6 +128,16 @@
         <div class="modal-status" id="modal-upload-status"></div>
       </div>
     </div>
+
+    <!-- Hidden Sensor Debug Overlay (?debug=1) -->
+    <div id="sensor-debug-overlay" class="sensor-debug-overlay hidden">
+      <div><strong>Sensor Debug (?debug=1)</strong></div>
+      <div>Platform: <span id="dbg-platform">-</span> | Mode: <span id="dbg-source">-</span></div>
+      <div>Raw Accel (m/s²): x=<span id="dbg-ax">0</span> y=<span id="dbg-ay">0</span> z=<span id="dbg-az">0</span></div>
+      <div>Calcd Angle: <span id="dbg-calc-angle">0</span>° | Device Hold: <span id="dbg-hold-angle">0</span>°</div>
+      <div>Screen Angle: <span id="dbg-screen-angle">0</span>° | Capture Rotation: <span id="dbg-capture-rot">0</span>°</div>
+      <div>UI Rotation: <span id="dbg-ui-rot">0</span>° | Samples: <span id="dbg-samples">0</span></div>
+    </div>
   </div>
 
   <script type="module" src="app.js"></script>
