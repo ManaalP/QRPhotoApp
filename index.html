@@ -33,31 +33,28 @@
         <div id="upload-status" class="pill-badge status-pill">Ready</div>
       </div>
 
-      <!-- Controls Overlay Group (Filter bar + Shutter row) -->
-      <div class="camera-controls-wrapper">
-        <!-- Live Filter Selection Strip -->
-        <div class="filter-strip" id="camera-filter-strip" role="radiogroup" aria-label="Filter choices">
-          <!-- Rendered dynamically via app.js -->
-        </div>
+      <!-- Live Filter Selection Strip -->
+      <div class="filter-strip" id="camera-filter-strip" role="radiogroup" aria-label="Filter choices">
+        <!-- Rendered dynamically via app.js -->
+      </div>
 
-        <!-- Shutter Row -->
-        <div class="bottom-bar">
-          <button id="btn-flip" class="icon-btn" aria-label="Flip Camera" title="Flip Camera">
-            <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 2.21 1.002 4.186 2.585 5.5"/>
-              <polyline points="4 6 4 10 8 10"/>
-              <path d="M4 14c0 4.418 3.582 8 8 8s8-3.582 8-8c0-2.21-1.002-4.186-2.585-5.5"/>
-              <polyline points="20 18 20 14 16 14"/>
-            </svg>
-          </button>
+      <!-- Shutter & Controls Row -->
+      <div class="bottom-bar">
+        <button id="btn-flip" class="icon-btn" aria-label="Flip Camera" title="Flip Camera">
+          <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 2.21 1.002 4.186 2.585 5.5"/>
+            <polyline points="4 6 4 10 8 10"/>
+            <path d="M4 14c0 4.418 3.582 8 8 8s8-3.582 8-8c0-2.21-1.002-4.186-2.585-5.5"/>
+            <polyline points="20 18 20 14 16 14"/>
+          </svg>
+        </button>
 
-          <button id="btn-shutter" class="shutter-btn" aria-label="Take Photo">
-            <div class="shutter-inner"></div>
-          </button>
+        <button id="btn-shutter" class="shutter-btn" aria-label="Take Photo">
+          <div class="shutter-inner"></div>
+        </button>
 
-          <!-- Hidden spacer of exact size to balance flip button on the left -->
-          <div class="control-spacer" aria-hidden="true"></div>
-        </div>
+        <!-- Hidden spacer of exact size to balance flip button on the left -->
+        <div class="control-spacer" aria-hidden="true"></div>
       </div>
 
       <!-- Fallback Input Trigger (Hidden file input) -->
@@ -76,7 +73,7 @@
         <canvas id="review-canvas"></canvas>
       </div>
 
-      <!-- Review Bottom Actions -->
+      <!-- Review Bottom / Side Actions -->
       <div class="review-bottom-bar">
         <button id="btn-retake" class="action-btn retake-btn">Retake</button>
         <button id="btn-use" class="action-btn use-btn">Use photo</button>

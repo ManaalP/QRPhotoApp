@@ -405,6 +405,14 @@ async function startCamera() {
     currentStream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = currentStream;
     await video.play();
+
+    // Mirror only front camera preview
+    if (currentFacingMode === 'user') {
+      video.classList.add('mirror-preview');
+    } else {
+      video.classList.remove('mirror-preview');
+    }
+
     updateLiveViewfinderFilter();
   } catch (err) {
     console.warn('getUserMedia error, displaying fallback:', err);
@@ -676,6 +684,19 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('online', () => {
   processUploadQueue();
+});
+
+// --- Orientation & Resize Handling without page reload ---
+function handleViewportOrOrientationChange() {
+  // Ensure video is playing and not stalled on orientation switch
+  if (video && video.srcObject && video.paused && screenCamera.classList.contains('active')) {
+    video.play().catch(() => {});
+  }
+}
+
+window.addEventListener('resize', handleViewportOrOrientationChange);
+window.addEventListener('orientationchange', () => {
+  setTimeout(handleViewportOrOrientationChange, 150);
 });
 
 // --- Initialize App ---
