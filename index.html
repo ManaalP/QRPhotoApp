@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Disposable Camera</title>
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- CDN Dependencies -->
+  <!-- Supabase JS Client v2 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.48.1/dist/umd/supabase.min.js"></script>
+  <!-- piexifjs for EXIF metadata manipulation -->
+  <script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/piexif.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- Camera View Screen -->
+    <div id="camera-screen" class="screen active">
+      <div class="viewfinder-container">
+        <video id="camera-video" playsinline muted autoplay></video>
+        <div id="shutter-flash" class="shutter-flash"></div>
+        <div class="viewfinder-frame">
+          <div class="corner-guide top-left"></div>
+          <div class="corner-guide top-right"></div>
+          <div class="corner-guide bottom-left"></div>
+          <div class="corner-guide bottom-right"></div>
+        </div>
+      </div>
+
+      <!-- Top Overlay: Status and Counter -->
+      <div class="top-bar">
+        <div id="shots-counter" class="pill-badge hidden">Shots: <span id="shots-remaining">0</span></div>
+        <div id="upload-status" class="pill-badge status-pill">Ready</div>
+      </div>
+
+      <!-- Fallback Input Trigger (Hidden file input) -->
+      <input type="file" id="fallback-file-input" accept="image/*" capture="environment" class="hidden">
+      
+      <!-- Fallback / Permission Banner -->
+      <div id="camera-error" class="camera-error hidden">
+        <p id="error-message">Camera access unavailable.</p>
+        <button id="btn-fallback-capture" class="secondary-btn">Upload / Take Photo</button>
+      </div>
+
+      <!-- Bottom Controls -->
+      <div class="bottom-bar">
+        <button id="btn-flip" class="icon-btn" aria-label="Flip Camera" title="Flip Camera">
+          <svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 2.21 1.002 4.186 2.585 5.5"/>
+            <polyline points="4 6 4 10 8 10"/>
+            <path d="M4 14c0 4.418 3.582 8 8 8s8-3.582 8-8c0-2.21-1.002-4.186-2.585-5.5"/>
+            <polyline points="20 18 20 14 16 14"/>
+          </svg>
+        </button>
+
+        <button id="btn-shutter" class="shutter-btn" aria-label="Take Photo">
+          <div class="shutter-inner"></div>
+        </button>
+
+        <!-- Empty spacer to keep shutter centered -->
+        <div class="control-spacer"></div>
+      </div>
+    </div>
+
+    <!-- Review Screen -->
+    <div id="review-screen" class="screen">
+      <div class="review-preview-container">
+        <canvas id="review-canvas"></canvas>
+      </div>
+
+      <!-- Filter Selection Strip -->
+      <div class="filter-strip" id="filter-strip" role="radiogroup" aria-label="Filter choices">
+        <!-- Rendered dynamically via app.js -->
+      </div>
+
+      <!-- Review Bottom Actions -->
+      <div class="review-bottom-bar">
+        <button id="btn-retake" class="action-btn retake-btn">Retake</button>
+        <button id="btn-use" class="action-btn use-btn">Use photo</button>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden">Saved ✓</div>
+
+    <!-- Limit Reached Modal -->
+    <div id="limit-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Film Finished! 🎞️</h2>
+        <p>You've taken all of your allocated photos for this event. Thank you for capturing memories with us!</p>
+        <div class="modal-status" id="modal-upload-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

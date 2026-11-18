@@ -1,0 +1,16 @@
+{
+  "name": "disposable-camera-web-app",
+  "version": "1.0.0",
+  "description": "Zero-cost, reliable static disposable camera web app for events with Supabase storage",
+  "type": "module",
+  "scripts": {
+    "make-qr": "node scripts/make-qr.mjs",
+    "download-all": "node scripts/download-all.mjs",
+    "load-test": "node scripts/load-test.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.48.1",
+    "dotenv": "^16.4.7",
+    "qrcode": "^1.5.4"
+  }
+}
