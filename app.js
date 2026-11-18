@@ -807,6 +807,7 @@ function setupFilterStrip() {
     const pill = document.createElement('button');
     pill.className = `filter-pill ${f.name === selectedFilter ? 'active' : ''}`;
     pill.textContent = f.name;
+    pill.id = `filter-pill-${f.name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`;
     pill.setAttribute('role', 'radio');
     pill.setAttribute('aria-checked', f.name === selectedFilter ? 'true' : 'false');
     pill.addEventListener('click', () => {
@@ -818,9 +819,42 @@ function setupFilterStrip() {
       pill.setAttribute('aria-checked', 'true');
       selectedFilter = f.name;
       updateLiveViewfinderFilter();
+      centerActiveFilterPill(pill, true);
     });
     cameraFilterStrip.appendChild(pill);
   });
+
+  // Center 'Original' on startup
+  requestAnimationFrame(() => {
+    const activePill = cameraFilterStrip.querySelector('.filter-pill.active');
+    if (activePill) centerActiveFilterPill(activePill, false);
+  });
+}
+
+function centerActiveFilterPill(pill, smooth = true) {
+  if (!pill || !cameraFilterStrip) return;
+  const isLandscape = window.matchMedia('(orientation: landscape)').matches;
+  if (!isLandscape) {
+    // Horizontal center
+    const stripWidth = cameraFilterStrip.clientWidth;
+    const pillOffset = pill.offsetLeft;
+    const pillWidth = pill.clientWidth;
+    const scrollTarget = pillOffset - (stripWidth / 2) + (pillWidth / 2);
+    cameraFilterStrip.scrollTo({
+      left: scrollTarget,
+      behavior: smooth ? 'smooth' : 'auto'
+    });
+  } else {
+    // Vertical center
+    const stripHeight = cameraFilterStrip.clientHeight;
+    const pillOffset = pill.offsetTop;
+    const pillHeight = pill.clientHeight;
+    const scrollTarget = pillOffset - (stripHeight / 2) + (pillHeight / 2);
+    cameraFilterStrip.scrollTo({
+      top: scrollTarget,
+      behavior: smooth ? 'smooth' : 'auto'
+    });
+  }
 }
 
 // --- High-Resolution Photo Capture (ImageCapture with Video Fallback) ---
@@ -1068,6 +1102,8 @@ function handleViewportOrOrientationChange() {
   if (video && video.srcObject && video.paused && screenCamera.classList.contains('active')) {
     video.play().catch(() => {});
   }
+  const activePill = cameraFilterStrip.querySelector('.filter-pill.active');
+  if (activePill) centerActiveFilterPill(activePill, false);
 }
 
 window.addEventListener('resize', handleViewportOrOrientationChange);

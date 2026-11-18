@@ -313,16 +313,19 @@ html, body {
 /* Filter Strip: Small text labels (iPhone Camera Mode row) */
 .filter-strip {
   width: 100%;
-  height: 42px;
+  height: 44px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 18px;
-  padding: 0 16px;
+  justify-content: flex-start;
+  gap: 20px;
+  padding: 0 max(20px, env(safe-area-inset-left, 20px));
+  padding-right: max(20px, env(safe-area-inset-right, 20px));
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
   -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
 }
 
 .filter-strip::-webkit-scrollbar {
@@ -331,6 +334,7 @@ html, body {
 
 .filter-pill {
   flex: 0 0 auto;
+  scroll-snap-align: center;
   background: transparent;
   border: none;
   color: #8e8e93;
@@ -339,7 +343,7 @@ html, body {
   letter-spacing: 0.5px;
   text-transform: uppercase;
   cursor: pointer;
-  padding: 6px 4px;
+  padding: 6px 6px;
   min-height: 44px; /* Accessible tap target */
   display: inline-flex;
   align-items: center;
@@ -514,22 +518,25 @@ html, body {
 
   /* Filter strip as a slim vertical strip to the left of shutter column */
   .filter-strip {
-    width: 36px;
+    width: 44px;
     height: 100%;
-    max-height: 75vh;
+    max-height: 80vh;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
+    align-items: center;
     gap: 16px;
-    padding: 0;
+    padding: 20px 0;
     overflow-y: auto;
     overflow-x: hidden;
     background: transparent;
+    scroll-snap-type: y mandatory;
   }
 
   .filter-pill {
+    scroll-snap-align: center;
     writing-mode: vertical-rl;
     transform: rotate(180deg);
-    padding: 8px 2px;
+    padding: 8px 4px;
     font-size: 11px;
     min-height: 44px;
   }
@@ -643,8 +650,13 @@ html, body {
 }
 
 .use-btn {
-  background: #ffffff;
-  color: #000000;
+  background: #34c759; /* iOS Camera Green */
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(52, 199, 89, 0.4);
+}
+
+.use-btn:active {
+  background: #2db84d;
 }
 
 /* Review Screen (Landscape): Buttons stack in a column on the right */
