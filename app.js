@@ -541,7 +541,70 @@ function updateQueueItem(item) {
   });
 }
 
-// --- Shots Count Management ---
+// --- Shots Count & Rate-Limiting Anti-Abuse Management ---
+const RATE_LIMIT_HISTORY_KEY = `rl_timestamps_${CONFIG.EVENT_ID}`;
+let lastCaptureTime = 0;
+
+function checkRateLimit() {
+  const now = Date.now();
+
+  // 1. Minimum interval check (prevent rapid button spamming or scripted clicking)
+  const minInterval = CONFIG.MIN_CAPTURE_INTERVAL_MS || 1500;
+  if (now - lastCaptureTime < minInterval) {
+    const waitSec = Math.ceil((minInterval - (now - lastCaptureTime)) / 1000);
+    return {
+      allowed: false,
+      message: `Please wait a moment...`
+    };
+  }
+
+  // 2. Rolling window rate limit (e.g. max 10 photos per minute)
+  const maxPerWindow = CONFIG.MAX_BURST_PER_MINUTE || 10;
+  const windowMs = 60 * 1000;
+  const cooldownSec = CONFIG.RATE_LIMIT_COOLDOWN_SEC || 15;
+
+  let history = [];
+  try {
+    const raw = localStorage.getItem(RATE_LIMIT_HISTORY_KEY);
+    if (raw) history = JSON.parse(raw);
+  } catch (e) {
+    history = [];
+  }
+
+  // Keep only timestamps within the rolling window
+  history = history.filter(ts => (now - ts) < windowMs);
+
+  if (history.length >= maxPerWindow) {
+    return {
+      allowed: false,
+      message: `Camera cooling down... please wait ${cooldownSec}s`
+    };
+  }
+
+  return { allowed: true };
+}
+
+function recordRateLimitCapture() {
+  const now = Date.now();
+  lastCaptureTime = now;
+
+  let history = [];
+  try {
+    const raw = localStorage.getItem(RATE_LIMIT_HISTORY_KEY);
+    if (raw) history = JSON.parse(raw);
+  } catch (e) {
+    history = [];
+  }
+
+  const windowMs = 60 * 1000;
+  history = history.filter(ts => (now - ts) < windowMs);
+  history.push(now);
+
+  try {
+    localStorage.setItem(RATE_LIMIT_HISTORY_KEY, JSON.stringify(history));
+  } catch (e) {}
+}
+
 function getShotsCount() {
   return parseInt(localStorage.getItem(SHOTS_STORAGE_KEY) || '0', 10);
 }
@@ -1152,7 +1215,15 @@ btnShutter.addEventListener('click', async () => {
     return;
   }
 
+  // Rate Limiting / Anti-Abuse Check
+  const rateCheck = checkRateLimit();
+  if (!rateCheck.allowed) {
+    showToast(rateCheck.message);
+    return;
+  }
+
   isTakingPhoto = true;
+  recordRateLimitCapture();
 
   // Shutter flash animation
   shutterFlash.classList.add('flashing');

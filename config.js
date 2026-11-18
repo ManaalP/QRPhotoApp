@@ -19,6 +19,12 @@ export const CONFIG = {
   JPEG_QUALITY: 0.9, // High-quality starting compression
   MIN_JPEG_QUALITY: 0.75, // Quality floor
   SETTLE_TIME_MS: 600, // Stream settle time after start/flip/focus before capturing
+
+  // Anti-Abuse Rate Limiting (RTL)
+  // Prevents automated spam / rapid bot clicking while allowing normal guests to take photos freely
+  MIN_CAPTURE_INTERVAL_MS: 1500, // Minimum delay between shutter presses (1.5 seconds)
+  MAX_BURST_PER_MINUTE: 10, // Maximum photos allowed in any rolling 60-second window
+  RATE_LIMIT_COOLDOWN_SEC: 15, // Cooldown period if bursting over the limit
   
   // Optional vintage date stamp in the bottom-right corner of the photo
   DATE_STAMP_ENABLED: true
