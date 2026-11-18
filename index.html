@@ -33,6 +33,11 @@
         <div id="upload-status" class="pill-badge status-pill">Ready</div>
       </div>
 
+      <!-- Live Filter Selection Strip (Before Taking Photo) -->
+      <div class="filter-strip camera-filter-strip" id="camera-filter-strip" role="radiogroup" aria-label="Filter choices">
+        <!-- Rendered dynamically via app.js -->
+      </div>
+
       <!-- Fallback Input Trigger (Hidden file input) -->
       <input type="file" id="fallback-file-input" accept="image/*" capture="environment" class="hidden">
       
@@ -66,11 +71,6 @@
     <div id="review-screen" class="screen">
       <div class="review-preview-container">
         <canvas id="review-canvas"></canvas>
-      </div>
-
-      <!-- Filter Selection Strip -->
-      <div class="filter-strip" id="filter-strip" role="radiogroup" aria-label="Filter choices">
-        <!-- Rendered dynamically via app.js -->
       </div>
 
       <!-- Review Bottom Actions -->
