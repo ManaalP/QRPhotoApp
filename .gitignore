@@ -3,3 +3,4 @@ node_modules/
 photos/
 *.png
 .DS_Store
+loadtest/results/

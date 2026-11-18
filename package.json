@@ -13,5 +13,8 @@
     "dotenv": "^16.4.7",
     "piexifjs": "^1.0.6",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.1"
   }
 }
