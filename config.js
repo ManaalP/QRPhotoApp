@@ -15,8 +15,10 @@ export const CONFIG = {
   // Camera & Image Constraints
   MAX_SHOTS: 0, // 0 means unlimited, or positive integer (e.g. 24)
   MAX_LONG_EDGE: 2048, // High-res long edge (2048px preserves sharp details for photos)
-  TARGET_KB: 500, // Target compression size around 500 KB to preserve full resolution
-  JPEG_QUALITY: 0.85, // Starting compression quality (0.0 to 1.0)
+  TARGET_KB: 800, // Target compression size around 800 KB to preserve full resolution
+  JPEG_QUALITY: 0.9, // High-quality starting compression
+  MIN_JPEG_QUALITY: 0.75, // Quality floor
+  SETTLE_TIME_MS: 600, // Stream settle time after start/flip/focus before capturing
   
   // Optional vintage date stamp in the bottom-right corner of the photo
   DATE_STAMP_ENABLED: true

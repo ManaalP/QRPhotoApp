@@ -4,6 +4,17 @@ import { CONFIG } from './config.js';
 let currentStream = null;
 let currentFacingMode = 'environment';
 let isTakingPhoto = false;
+let isSwitchingCamera = false;
+let cameraSettleTimer = null;
+let canCapture = false;
+
+// Zoom & Capabilities State
+let currentTrack = null;
+let trackCapabilities = null;
+let imageCapture = null;
+let currentZoom = 1;
+let isTorchOn = false;
+let isGridOn = false;
 
 // Images in memory during review
 let capturedCanvas = null; // Full resolution canvas of raw captured frame
@@ -28,6 +39,14 @@ const video = document.getElementById('camera-video');
 const shutterFlash = document.getElementById('shutter-flash');
 const btnShutter = document.getElementById('btn-shutter');
 const btnFlip = document.getElementById('btn-flip');
+const btnFlash = document.getElementById('btn-flash');
+const btnGrid = document.getElementById('btn-grid');
+const gridOverlay = document.getElementById('grid-overlay');
+const zoomControls = document.getElementById('zoom-controls');
+const zoom1xBtn = document.getElementById('zoom-1x');
+const zoom2xBtn = document.getElementById('zoom-2x');
+const focusReticle = document.getElementById('focus-reticle');
+const viewfinderAspectBox = document.getElementById('viewfinder-aspect-box');
 const reviewCanvas = document.getElementById('review-canvas');
 const cameraFilterStrip = document.getElementById('camera-filter-strip');
 const btnRetake = document.getElementById('btn-retake');
@@ -54,7 +73,6 @@ const FILTERS = [
 
 function updateLiveViewfinderFilter() {
   const currentObj = FILTERS.find(f => f.name === selectedFilter) || FILTERS[0];
-  // Remove all filter classes from video
   FILTERS.forEach(f => video.classList.remove(f.cssClass));
   video.classList.add(currentObj.cssClass);
 }
@@ -95,7 +113,7 @@ function applyFilterToImageData(imageData, filterName) {
         const i = (y * width + x) * 4;
         let r = d[i], g = d[i + 1], b = d[i + 2];
 
-        // 1. Lift blacks (fade shadows like old film)
+        // 1. Lift blacks (fade shadows)
         r = r * 0.85 + 28;
         g = g * 0.85 + 20;
         b = b * 0.80 + 15;
@@ -146,7 +164,7 @@ function applyFilterToImageData(imageData, filterName) {
   return imageData;
 }
 
-// Draw classic film camera date stamp on the canvas
+// Draw vintage film camera date stamp on the canvas
 function drawDateStamp(ctx, width, height) {
   if (!CONFIG.DATE_STAMP_ENABLED) return;
 
@@ -344,7 +362,7 @@ async function uploadSingleItem(item) {
   }
 }
 
-// --- EXIF Metadata Injection (Safe) ---
+// --- EXIF Metadata Injection (Orientation 1) ---
 function injectExifMetadata(jpegDataUrl, captureDate) {
   if (typeof piexif === 'undefined' || !piexif.dump || !piexif.insert) {
     console.warn('piexifjs not loaded, skipping EXIF insertion.');
@@ -365,6 +383,8 @@ function injectExifMetadata(jpegDataUrl, captureDate) {
     const zeroth = {};
     const exif = {};
 
+    // Standard EXIF fields + Orientation 1 (upright)
+    zeroth[piexif.ImageIFD.Orientation] = 1;
     zeroth[piexif.ImageIFD.Make] = "Disposable Camera Web App";
     zeroth[piexif.ImageIFD.Software] = "Disposable Camera Web App";
     zeroth[piexif.ImageIFD.ImageDescription] = `${CONFIG.EVENT_NAME} – ${CONFIG.EVENT_DATE}`;
@@ -383,17 +403,217 @@ function injectExifMetadata(jpegDataUrl, captureDate) {
   }
 }
 
-// --- Camera Handling ---
+// --- Camera Capabilities & Controls Setup ---
+async function checkDeviceCameraCount() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputs = devices.filter(d => d.kind === 'videoinput');
+    if (videoInputs.length <= 1) {
+      btnFlip.classList.add('hidden');
+    } else {
+      btnFlip.classList.remove('hidden');
+    }
+  } catch (e) {
+    console.warn('Could not enumerate camera devices:', e);
+  }
+}
+
+function refreshCameraFeatures(track) {
+  if (!track || !track.getCapabilities) {
+    btnFlash.classList.add('hidden');
+    zoomControls.classList.add('hidden');
+    return;
+  }
+
+  try {
+    trackCapabilities = track.getCapabilities();
+
+    // 1. Continuous autofocus & exposure by default
+    const constraints = {};
+    const adv = {};
+    if (trackCapabilities.focusMode && trackCapabilities.focusMode.includes('continuous')) {
+      adv.focusMode = 'continuous';
+    }
+    if (trackCapabilities.exposureMode && trackCapabilities.exposureMode.includes('continuous')) {
+      adv.exposureMode = 'continuous';
+    }
+    if (Object.keys(adv).length > 0) {
+      constraints.advanced = [adv];
+      track.applyConstraints(constraints).catch(() => {});
+    }
+
+    // 2. Torch (Flash)
+    if (trackCapabilities.torch) {
+      btnFlash.classList.remove('hidden');
+      isTorchOn = false;
+      btnFlash.classList.remove('active');
+    } else {
+      btnFlash.classList.add('hidden');
+      isTorchOn = false;
+    }
+
+    // 3. Zoom
+    if (trackCapabilities.zoom && trackCapabilities.zoom.max > 1) {
+      zoomControls.classList.remove('hidden');
+      currentZoom = 1;
+      updateZoomButtons();
+      track.applyConstraints({ advanced: [{ zoom: 1 }] }).catch(() => {});
+    } else {
+      zoomControls.classList.add('hidden');
+    }
+
+    // 4. ImageCapture setup
+    if ('ImageCapture' in window) {
+      try {
+        imageCapture = new window.ImageCapture(track);
+      } catch (e) {
+        imageCapture = null;
+      }
+    } else {
+      imageCapture = null;
+    }
+  } catch (e) {
+    console.warn('Error evaluating track capabilities:', e);
+  }
+}
+
+function updateZoomButtons() {
+  zoom1xBtn.classList.toggle('active', currentZoom === 1);
+  zoom2xBtn.classList.toggle('active', currentZoom === 2);
+}
+
+// Zoom button handlers
+zoom1xBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setCameraZoom(1);
+});
+
+zoom2xBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setCameraZoom(2);
+});
+
+async function setCameraZoom(level) {
+  if (!currentTrack || !trackCapabilities || !trackCapabilities.zoom) return;
+  const target = Math.min(level, trackCapabilities.zoom.max || 1);
+  try {
+    await currentTrack.applyConstraints({ advanced: [{ zoom: target }] });
+    currentZoom = level;
+    updateZoomButtons();
+  } catch (e) {
+    console.warn('Failed to apply zoom:', e);
+  }
+}
+
+// Flash (Torch) button handler
+btnFlash.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  if (!currentTrack || !trackCapabilities || !trackCapabilities.torch) return;
+  try {
+    const nextState = !isTorchOn;
+    await currentTrack.applyConstraints({ advanced: [{ torch: nextState }] });
+    isTorchOn = nextState;
+    btnFlash.classList.toggle('active', isTorchOn);
+  } catch (e) {
+    console.warn('Torch toggle failed:', e);
+  }
+});
+
+// Grid button handler
+btnGrid.addEventListener('click', (e) => {
+  e.stopPropagation();
+  isGridOn = !isGridOn;
+  gridOverlay.classList.toggle('hidden', !isGridOn);
+  btnGrid.classList.toggle('active', isGridOn);
+});
+
+// --- Tap To Focus with Normalized Mapping ---
+viewfinderAspectBox.addEventListener('click', async (e) => {
+  // Avoid focus trigger when clicking zoom buttons
+  if (e.target.closest('#zoom-controls')) return;
+
+  const rect = viewfinderAspectBox.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const clickY = e.clientY - rect.top;
+
+  // Show visual focus reticle square
+  focusReticle.style.left = `${clickX}px`;
+  focusReticle.style.top = `${clickY}px`;
+  focusReticle.classList.remove('hidden');
+
+  // Re-trigger animation
+  focusReticle.style.animation = 'none';
+  void focusReticle.offsetHeight;
+  focusReticle.style.animation = '';
+
+  setTimeout(() => {
+    focusReticle.classList.add('hidden');
+  }, 1200);
+
+  // Settle capture timer so tap doesn't take blurry photo mid-focus
+  canCapture = false;
+  btnShutter.disabled = true;
+  clearTimeout(cameraSettleTimer);
+  cameraSettleTimer = setTimeout(() => {
+    canCapture = true;
+    btnShutter.disabled = false;
+  }, CONFIG.SETTLE_TIME_MS || 600);
+
+  // Hardware focus if supported (e.g. Android Chrome)
+  if (currentTrack && trackCapabilities && trackCapabilities.focusMode) {
+    try {
+      let normX = clickX / rect.width;
+      let normY = clickY / rect.height;
+
+      // Handle front camera preview mirror
+      if (currentFacingMode === 'user') {
+        normX = 1 - normX;
+      }
+
+      const adv = {};
+      if (trackCapabilities.focusMode.includes('single-shot')) {
+        adv.focusMode = 'single-shot';
+      } else if (trackCapabilities.focusMode.includes('manual')) {
+        adv.focusMode = 'manual';
+      }
+
+      if (trackCapabilities.pointsOfInterest) {
+        adv.pointsOfInterest = [{ x: normX, y: normY }];
+      }
+
+      if (Object.keys(adv).length > 0) {
+        await currentTrack.applyConstraints({ advanced: [adv] });
+
+        // Restore continuous autofocus after ~3s
+        setTimeout(() => {
+          if (currentTrack && trackCapabilities.focusMode && trackCapabilities.focusMode.includes('continuous')) {
+            currentTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+          }
+        }, 3000);
+      }
+    } catch (err) {
+      console.warn('Tap to focus applyConstraints error (ignored):', err);
+    }
+  }
+});
+
+// --- Camera Stream Lifecycle ---
 async function startCamera() {
   stopCamera();
   cameraErrorEl.classList.add('hidden');
 
+  // Disable shutter until stream settles (~600ms) to ensure sharp focus
+  canCapture = false;
+  btnShutter.disabled = true;
+
+  // High-resolution stream constraints with ideal values only (no forced aspect ratio)
   const constraints = {
     audio: false,
     video: {
       facingMode: { ideal: currentFacingMode },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 }
+      width: { ideal: 4096 },
+      height: { ideal: 3072 }
     }
   };
 
@@ -414,6 +634,20 @@ async function startCamera() {
     }
 
     updateLiveViewfinderFilter();
+
+    currentTrack = currentStream.getVideoTracks()[0];
+    refreshCameraFeatures(currentTrack);
+    await checkDeviceCameraCount();
+
+    // Settle camera timer before allowing capture
+    clearTimeout(cameraSettleTimer);
+    cameraSettleTimer = setTimeout(() => {
+      canCapture = true;
+      if (CONFIG.MAX_SHOTS === 0 || getShotsCount() < CONFIG.MAX_SHOTS) {
+        btnShutter.disabled = false;
+      }
+    }, CONFIG.SETTLE_TIME_MS || 600);
+
   } catch (err) {
     console.warn('getUserMedia error, displaying fallback:', err);
     showCameraFallback(err.message || 'Camera permission denied or camera unavailable.');
@@ -424,6 +658,8 @@ function stopCamera() {
   if (currentStream) {
     currentStream.getTracks().forEach(track => track.stop());
     currentStream = null;
+    currentTrack = null;
+    imageCapture = null;
   }
 }
 
@@ -432,10 +668,83 @@ function showCameraFallback(msg) {
   cameraErrorEl.classList.remove('hidden');
 }
 
-// Flip camera
-btnFlip.addEventListener('click', () => {
-  currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
-  startCamera();
+// --- Flip Camera Button (Fix E: Robust look & behavior) ---
+btnFlip.addEventListener('click', async () => {
+  if (isSwitchingCamera) return;
+  isSwitchingCamera = true;
+
+  // Spin animation
+  btnFlip.classList.add('spinning');
+  btnFlip.disabled = true;
+  btnShutter.disabled = true;
+  canCapture = false;
+
+  const previousFacingMode = currentFacingMode;
+  const targetFacingMode = (previousFacingMode === 'environment') ? 'user' : 'environment';
+
+  // Stop every track of current stream first (critical on iOS Safari)
+  stopCamera();
+
+  try {
+    // Try exact constraint first, then fallback to ideal
+    let stream = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { exact: targetFacingMode },
+          width: { ideal: 4096 },
+          height: { ideal: 3072 }
+        }
+      });
+    } catch (e) {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: targetFacingMode },
+          width: { ideal: 4096 },
+          height: { ideal: 3072 }
+        }
+      });
+    }
+
+    currentFacingMode = targetFacingMode;
+    currentStream = stream;
+    video.srcObject = currentStream;
+    await video.play();
+
+    // Mirror only front camera preview
+    if (currentFacingMode === 'user') {
+      video.classList.add('mirror-preview');
+    } else {
+      video.classList.remove('mirror-preview');
+    }
+
+    updateLiveViewfinderFilter();
+    currentTrack = currentStream.getVideoTracks()[0];
+    refreshCameraFeatures(currentTrack);
+
+    // Settle camera timer
+    clearTimeout(cameraSettleTimer);
+    cameraSettleTimer = setTimeout(() => {
+      canCapture = true;
+      if (CONFIG.MAX_SHOTS === 0 || getShotsCount() < CONFIG.MAX_SHOTS) {
+        btnShutter.disabled = false;
+      }
+    }, CONFIG.SETTLE_TIME_MS || 600);
+
+  } catch (err) {
+    console.warn("Couldn't switch camera, reverting to previous:", err);
+    showToast("Couldn't switch camera");
+    currentFacingMode = previousFacingMode;
+    await startCamera();
+  } finally {
+    setTimeout(() => {
+      btnFlip.classList.remove('spinning');
+      btnFlip.disabled = false;
+      isSwitchingCamera = false;
+    }, 280);
+  }
 });
 
 // Fallback trigger
@@ -463,7 +772,7 @@ fallbackInput.addEventListener('change', async (e) => {
 
     let w = imageBitmap.width;
     let h = imageBitmap.height;
-    const maxEdge = CONFIG.MAX_LONG_EDGE || 1600;
+    const maxEdge = CONFIG.MAX_LONG_EDGE || 2048;
 
     if (w > maxEdge || h > maxEdge) {
       if (w >= h) {
@@ -479,6 +788,8 @@ fallbackInput.addEventListener('change', async (e) => {
     capturedCanvas.width = w;
     capturedCanvas.height = h;
     const ctx = capturedCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(imageBitmap, 0, 0, w, h);
 
     prepareReviewScreen();
@@ -512,9 +823,9 @@ function setupFilterStrip() {
   });
 }
 
-// --- Shutter & Capture ---
-btnShutter.addEventListener('click', () => {
-  if (isTakingPhoto) return;
+// --- High-Resolution Photo Capture (ImageCapture with Video Fallback) ---
+btnShutter.addEventListener('click', async () => {
+  if (isTakingPhoto || !canCapture) return;
   if (CONFIG.MAX_SHOTS > 0 && getShotsCount() >= CONFIG.MAX_SHOTS) {
     updateShotsUI();
     return;
@@ -522,49 +833,116 @@ btnShutter.addEventListener('click', () => {
 
   isTakingPhoto = true;
 
-  // Flash animation
+  // Shutter flash animation
   shutterFlash.classList.add('flashing');
   setTimeout(() => shutterFlash.classList.remove('flashing'), 120);
 
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+  try {
+    let sourceBitmap = null;
 
-  if (!vw || !vh) {
-    isTakingPhoto = false;
-    return;
-  }
-
-  let w = vw;
-  let h = vh;
-  const maxEdge = CONFIG.MAX_LONG_EDGE || 1600;
-
-  if (w > maxEdge || h > maxEdge) {
-    if (w >= h) {
-      h = Math.round((h * maxEdge) / w);
-      w = maxEdge;
-    } else {
-      w = Math.round((w * maxEdge) / h);
-      h = maxEdge;
+    // 1. Try ImageCapture API if available
+    if (imageCapture && typeof imageCapture.takePhoto === 'function') {
+      try {
+        let photoSettings = {};
+        if (typeof imageCapture.getPhotoCapabilities === 'function') {
+          const caps = await imageCapture.getPhotoCapabilities();
+          if (caps && caps.imageWidth && caps.imageHeight) {
+            photoSettings = {
+              imageWidth: caps.imageWidth.max,
+              imageHeight: caps.imageHeight.max
+            };
+          }
+        }
+        const blob = await imageCapture.takePhoto(photoSettings);
+        sourceBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      } catch (err) {
+        console.warn('ImageCapture failed, falling back to video frame draw:', err);
+        sourceBitmap = null;
+      }
     }
+
+    // Determine target aspect ratio (3:4 in portrait, 4:3 in landscape)
+    const isLandscape = window.matchMedia('(orientation: landscape)').matches;
+    const targetAspect = isLandscape ? (4 / 3) : (3 / 4);
+
+    let rawW, rawH;
+    if (sourceBitmap) {
+      rawW = sourceBitmap.width;
+      rawH = sourceBitmap.height;
+    } else {
+      rawW = video.videoWidth;
+      rawH = video.videoHeight;
+    }
+
+    if (!rawW || !rawH) {
+      isTakingPhoto = false;
+      return;
+    }
+
+    // Crop source frame to match the exact 3:4 or 4:3 viewfinder framing (WYSIWYG)
+    const rawAspect = rawW / rawH;
+    let cropX = 0, cropY = 0, cropW = rawW, cropH = rawH;
+
+    if (rawAspect > targetAspect) {
+      // Source is wider than target aspect ratio: crop horizontally
+      cropW = Math.round(rawH * targetAspect);
+      cropX = Math.round((rawW - cropW) / 2);
+    } else {
+      // Source is taller than target aspect ratio: crop vertically
+      cropH = Math.round(rawW / targetAspect);
+      cropY = Math.round((rawH - cropH) / 2);
+    }
+
+    // Scale to MAX_LONG_EDGE
+    let finalW = cropW;
+    let finalH = cropH;
+    const maxEdge = CONFIG.MAX_LONG_EDGE || 2048;
+
+    if (finalW > maxEdge || finalH > maxEdge) {
+      if (finalW >= finalH) {
+        finalH = Math.round((finalH * maxEdge) / finalW);
+        finalW = maxEdge;
+      } else {
+        finalW = Math.round((finalW * maxEdge) / finalH);
+        finalH = maxEdge;
+      }
+    }
+
+    capturedCanvas = document.createElement('canvas');
+    capturedCanvas.width = finalW;
+    capturedCanvas.height = finalH;
+    const ctx = capturedCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Front camera mirror consistency
+    if (currentFacingMode === 'user') {
+      ctx.translate(finalW, 0);
+      ctx.scale(-1, 1);
+    }
+
+    if (sourceBitmap) {
+      ctx.drawImage(sourceBitmap, cropX, cropY, cropW, cropH, 0, 0, finalW, finalH);
+    } else {
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, finalW, finalH);
+    }
+
+    stopCamera();
+    prepareReviewScreen();
+  } catch (err) {
+    console.error('Error during photo capture:', err);
+  } finally {
+    isTakingPhoto = false;
   }
-
-  capturedCanvas = document.createElement('canvas');
-  capturedCanvas.width = w;
-  capturedCanvas.height = h;
-  const ctx = capturedCanvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, w, h);
-
-  stopCamera();
-  prepareReviewScreen();
-  isTakingPhoto = false;
 });
 
 // --- Review Screen ---
 function prepareReviewScreen() {
-  // Render review canvas with the selected filter applied
   reviewCanvas.width = capturedCanvas.width;
   reviewCanvas.height = capturedCanvas.height;
   const ctx = reviewCanvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(capturedCanvas, 0, 0);
 
   if (selectedFilter !== 'Original') {
@@ -605,25 +983,24 @@ function randomString(length = 8) {
   return res;
 }
 
-// Use photo button (Confirm & Enqueue with adaptive ~500KB compression)
+// Use photo button (Confirm & Enqueue with high-res ~800KB target compression)
 btnUse.addEventListener('click', async () => {
   if (!capturedCanvas) return;
 
   const captureDate = new Date();
 
-  // Compress to target ~500 KB to preserve full resolution without bloat
-  const targetBytes = (CONFIG.TARGET_KB || 500) * 1024;
-  let quality = CONFIG.JPEG_QUALITY || 0.85;
+  // Compress to target ~800 KB to preserve full resolution (floor: 0.75 quality)
+  const targetBytes = (CONFIG.TARGET_KB || 800) * 1024;
+  let quality = CONFIG.JPEG_QUALITY || 0.90;
   let dataUrl = reviewCanvas.toDataURL('image/jpeg', quality);
 
-  // Approximate byte size of base64 data
   const base64Len = dataUrl.length - 'data:image/jpeg;base64,'.length;
   let approxBytes = Math.round((base64Len * 3) / 4);
 
-  // If initial export exceeds target by more than 15%, step quality down gradually
+  // If initial export exceeds target by more than 15%, step quality down gradually to floor 0.75
   if (approxBytes > targetBytes * 1.15) {
-    const qualities = [0.80, 0.75, 0.70];
-    for (const q of qualities) {
+    const qualitySteps = [0.85, 0.80, 0.75];
+    for (const q of qualitySteps) {
       const candidateUrl = reviewCanvas.toDataURL('image/jpeg', q);
       const cLen = candidateUrl.length - 'data:image/jpeg;base64,'.length;
       const cBytes = Math.round((cLen * 3) / 4);
@@ -633,7 +1010,7 @@ btnUse.addEventListener('click', async () => {
     }
   }
 
-  // Inject EXIF metadata
+  // Inject EXIF metadata with upright orientation (1)
   dataUrl = injectExifMetadata(dataUrl, captureDate);
 
   // Unique upload path: EVENT_ID/EVENT_DATE_<ISO time>_<8 random chars>.jpg
@@ -688,7 +1065,6 @@ window.addEventListener('online', () => {
 
 // --- Orientation & Resize Handling without page reload ---
 function handleViewportOrOrientationChange() {
-  // Ensure video is playing and not stalled on orientation switch
   if (video && video.srcObject && video.paused && screenCamera.classList.contains('active')) {
     video.play().catch(() => {});
   }
